@@ -16,5 +16,6 @@ locales/
 /debug.svg
 /.idea
 /VERSION
-/src/
+#/src/
+*egg-info
 .DS_STORE
