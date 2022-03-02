@@ -1,3 +1,21 @@
+# Note about this fork
+
+This fork simply adds package files - [pyproject.toml](pyproject.toml), [setup.cfg](setup.cfg) and a [src](src) directory - so that the Python library located in [lib](lib) can be installed via pip and made available as a package named `inkstitch`.
+
+Installation:
+```sh
+pip install git+https://github.com/ely-as/inkstitch@v2.1.2
+```
+
+Example usage:
+```py
+from inkstitch.output import write_embroidery_file
+
+...
+```
+
+***
+
 <a href="https://user-images.githubusercontent.com/11083514/41197881-e862e07a-6c62-11e8-89d6-32915e52bece.png"><img align=right src="images/examples/inkstitch_logo_screenshot.png"></a>
 
 # Ink/Stitch: An open source machine embroidery design platform based on Inkscape
