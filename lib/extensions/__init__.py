@@ -3,7 +3,7 @@
 # Copyright (c) 2010 Authors
 # Licensed under the GNU GPL version 3.0 or later.  See the file LICENSE for details.
 
-from lib.extensions.troubleshoot import Troubleshoot
+from .troubleshoot import Troubleshoot
 
 from .auto_satin import AutoSatin
 from .break_apart import BreakApart
