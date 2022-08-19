@@ -6,17 +6,18 @@
 from copy import deepcopy
 from itertools import chain
 
-from inkex import paths
 from shapely import affinity as shaffinity
 from shapely import geometry as shgeo
 from shapely.ops import nearest_points
 
-from .element import EmbroideryElement, param
-from .validation import ValidationError, ValidationWarning
+from inkex import paths
+
 from ..i18n import _
 from ..stitch_plan import StitchGroup
 from ..svg import line_strings_to_csp, point_lists_to_csp
 from ..utils import Point, cache, collapse_duplicate_point, cut
+from .element import EmbroideryElement, param
+from .validation import ValidationError, ValidationWarning
 
 
 class SatinHasFillError(ValidationError):
@@ -48,6 +49,15 @@ class UnequalPointsError(ValidationError):
         _('Rungs control the stitch direction in satin columns.'),
         _('* With the selected object press "P" to activate the pencil tool.'),
         _('* Hold "Shift" while drawing the rung.')
+    ]
+
+
+class NotStitchableError(ValidationError):
+    name = _("Not stitchable satin column")
+    description = _("A satin column consists out of two rails and one or more rungs. This satin column may have a different setup.")
+    steps_to_solve = [
+        _('Make sure your satin column is not a combination of multiple satin columns.'),
+        _('Go to our website and read how a satin column should look like https://inkstitch.org/docs/stitches/satin-column/'),
     ]
 
 
@@ -88,6 +98,24 @@ class SatinColumn(EmbroideryElement):
            type='float', unit="mm")
     def max_stitch_length(self):
         return self.get_float_param("max_stitch_length_mm") or None
+
+    @property
+    @param('short_stitch_inset',
+           _('Short stitch inset'),
+           tooltip=_('Stitches in areas with high density will be shortened by this amount.'),
+           type='float', unit="%",
+           default=15)
+    def short_stitch_inset(self):
+        return self.get_float_param("short_stitch_inset", 15) / 100
+
+    @property
+    @param('short_stitch_distance_mm',
+           _('Short stitch distance'),
+           tooltip=_('Do short stitches if the distance between stitches is smaller than this.'),
+           type='float', unit="mm",
+           default=0.25)
+    def short_stitch_distance(self):
+        return self.get_float_param("short_stitch_distance_mm", 0.25)
 
     @property
     def color(self):
@@ -156,6 +184,11 @@ class SatinColumn(EmbroideryElement):
         return max(self.get_float_param("center_walk_underlay_stitch_length_mm", 1.5), 0.01)
 
     @property
+    @param('center_walk_underlay_repeats', _('Repeats'), group=_('Center-Walk Underlay'), type='int', default=2, sort_index=2)
+    def center_walk_underlay_repeats(self):
+        return max(self.get_int_param("center_walk_underlay_repeats", 2), 1)
+
+    @property
     @param('zigzag_underlay', _('Zig-zag underlay'), type='toggle', group=_('Zig-zag Underlay'))
     def zigzag_underlay(self):
         return self.get_boolean_param("zigzag_underlay")
@@ -206,10 +239,7 @@ class SatinColumn(EmbroideryElement):
         # This isn't used for satins at all, but other parts of the code
         # may need to know the general shape of a satin column.
 
-        flattened = self.flatten(self.parse_path())
-        line_strings = [shgeo.LineString(path) for path in flattened]
-
-        return shgeo.MultiLineString(line_strings)
+        return shgeo.MultiLineString(self.flattened_rails).convex_hull
 
     @property
     @cache
@@ -421,6 +451,12 @@ class SatinColumn(EmbroideryElement):
                     intersection = rung.intersection(rail)
                     if not intersection.is_empty and not isinstance(intersection, shgeo.Point):
                         yield TooManyIntersectionsError(rung.interpolate(0.5, normalized=True))
+
+        if not self.to_stitch_groups():
+            yield NotStitchableError(self.shape.centroid)
+
+    def _center_walk_is_odd(self):
+        return self.center_walk_underlay_repeats % 2 == 1
 
     def reverse(self):
         """Return a new SatinColumn like this one but in the opposite direction.
@@ -679,8 +715,6 @@ class SatinColumn(EmbroideryElement):
                 # Each iteration of this outer loop is one stitch.  Keep going
                 # until we fall off the end of the section.
 
-                # TODO: is there an other way?
-                # old_center = (pos0 + pos1) / 2.0
                 old_center = shgeo.Point(x/2 for x in (pos0 + pos1))
 
                 while to_travel > 0 and index0 < last_index0 and index1 < last_index1:
@@ -708,8 +742,6 @@ class SatinColumn(EmbroideryElement):
                     pos0, index0 = self.walk(section0, pos0, index0, 0.05)
                     pos1, index1 = self.walk(section1, pos1, index1, 0.05 * ratio)
 
-                    # TODO: is there a better way?
-                    # new_center = (pos0 + pos1) / 2.0
                     new_center = shgeo.Point(x/2 for x in (pos0 + pos1))
                     to_travel -= new_center.distance(old_center)
                     old_center = new_center
@@ -726,24 +758,34 @@ class SatinColumn(EmbroideryElement):
     def do_contour_underlay(self):
         # "contour walk" underlay: do stitches up one side and down the
         # other.
-        forward, back = self.plot_points_on_rails(self.contour_underlay_stitch_length,
-                                                  -self.contour_underlay_inset)
+        forward, back = self.plot_points_on_rails(self.contour_underlay_stitch_length, -self.contour_underlay_inset)
+        stitches = (forward + list(reversed(back)))
+        if self._center_walk_is_odd():
+            stitches = (list(reversed(back)) + forward)
+
         return StitchGroup(
             color=self.color,
             tags=("satin_column", "satin_column_underlay", "satin_contour_underlay"),
-            stitches=(forward + list(reversed(back))))
+            stitches=stitches)
 
     def do_center_walk(self):
         # Center walk underlay is just a running stitch down and back on the
         # center line between the bezier curves.
 
         # Do it like contour underlay, but inset all the way to the center.
-        forward, back = self.plot_points_on_rails(self.center_walk_underlay_stitch_length,
-                                                  -100000)
+        forward, back = self.plot_points_on_rails(self.center_walk_underlay_stitch_length, -100000)
+
+        stitches = []
+        for i in range(self.center_walk_underlay_repeats):
+            if i % 2 == 0:
+                stitches += forward
+            else:
+                stitches += list(reversed(back))
+
         return StitchGroup(
             color=self.color,
             tags=("satin_column", "satin_column_underlay", "satin_center_walk"),
-            stitches=(forward + list(reversed(back))))
+            stitches=stitches)
 
     def do_zigzag_underlay(self):
         # zigzag underlay, usually done at a much lower density than the
@@ -760,6 +802,9 @@ class SatinColumn(EmbroideryElement):
 
         sides = self.plot_points_on_rails(self.zigzag_underlay_spacing / 2.0,
                                           -self.zigzag_underlay_inset)
+
+        if self._center_walk_is_odd():
+            sides = [list(reversed(sides[0])), list(reversed(sides[1]))]
 
         # This organizes the points in each side in the order that they'll be
         # visited.
@@ -790,16 +835,23 @@ class SatinColumn(EmbroideryElement):
 
         # print >> dbg, "satin", self.zigzag_spacing, self.pull_compensation
 
-        if self.max_stitch_length:
-            return self.do_split_stitch()
-
         patch = StitchGroup(color=self.color)
-
         sides = self.plot_points_on_rails(self.zigzag_spacing, self.pull_compensation)
+
+        if self.max_stitch_length:
+            return self.do_split_stitch(patch, sides)
+
+        # short stitches are not not included into the split stitch
+        # they would move the points in a maybe unwanted behaviour
+        if self.short_stitch_inset > 0:
+            self._do_short_stitches(sides)
 
         # Like in zigzag_underlay(): take a point from each side in turn.
         for point in chain.from_iterable(zip(*sides)):
             patch.add_stitch(point)
+
+        if self._center_walk_is_odd():
+            patch.stitches = list(reversed(patch.stitches))
 
         patch.add_tags(("satin_column", "satin_column_edge"))
         return patch
@@ -823,13 +875,14 @@ class SatinColumn(EmbroideryElement):
             patch.add_stitch(right)
             patch.add_stitch(left)
 
+        if self._center_walk_is_odd():
+            patch.stitches = list(reversed(patch.stitches))
+
         patch.add_tags(("satin_column", "e_stitch"))
         return patch
 
-    def do_split_stitch(self):
+    def do_split_stitch(self, patch, sides):
         # stitches exceeding the maximum stitch length will be divided into equal parts through additional stitches
-        patch = StitchGroup(color=self.color)
-        sides = self.plot_points_on_rails(self.zigzag_spacing, self.pull_compensation)
         for i, (left, right) in enumerate(zip(*sides)):
             patch.add_stitch(left)
             patch.stitches[-1].add_tags(("satin_column", "satin_column_edge"))
@@ -847,6 +900,8 @@ class SatinColumn(EmbroideryElement):
                 for point in points:
                     patch.add_stitch(point)
                     patch.stitches[-1].add_tags(("satin_column", "satin_split_stitch"))
+        if self._center_walk_is_odd():
+            patch.stitches = list(reversed(patch.stitches))
         return patch
 
     def _get_split_points(self, left, right, max_stitch_length, count=None):
@@ -859,7 +914,21 @@ class SatinColumn(EmbroideryElement):
             points.append(Point(split_point.x, split_point.y))
         return [points, split_count]
 
-    def to_stitch_groups(self, last_patch):
+    def _do_short_stitches(self, sides):
+        for i, (left, right) in enumerate(zip(*sides)):
+            if i % 2 == 0:
+                continue
+            if left.distance(sides[0][i-1]) < self.short_stitch_distance:
+                split_point = self._get_inset_point(left, right, self.short_stitch_inset)
+                sides[0][i] = Point(split_point.x, split_point.y)
+            if right.distance(sides[1][i-1]) < self.short_stitch_distance:
+                split_point = self._get_inset_point(right, left, self.short_stitch_inset)
+                sides[1][i] = Point(split_point.x, split_point.y)
+
+    def _get_inset_point(self, point1, point2, distance_fraction):
+        return point1 * (1 - distance_fraction) + point2 * distance_fraction
+
+    def to_stitch_groups(self, last_patch=None):
         # Stitch a variable-width satin column, zig-zagging between two paths.
 
         # The algorithm will draw zigzags between each consecutive pair of
@@ -883,5 +952,8 @@ class SatinColumn(EmbroideryElement):
             patch += self.do_e_stitch()
         else:
             patch += self.do_satin()
+
+        if not patch.stitches:
+            return []
 
         return [patch]

@@ -5,7 +5,7 @@
 
 import math
 
-from shapely.geometry import LineString
+from shapely.geometry import LineString, LinearRing, MultiLineString, Polygon, MultiPolygon, MultiPoint, GeometryCollection
 from shapely.geometry import Point as ShapelyPoint
 
 
@@ -39,6 +39,62 @@ def cut(line, distance, normalized=False):
                 LineString([(cp.x, cp.y)] + coords[i:])]
 
 
+def roll_linear_ring(ring, distance, normalized=False):
+    """Make a linear ring start at a different point.
+
+    Example: A B C D E F G A -> D E F G A B C
+
+    Same linear ring, different ordering of the coordinates.
+    """
+
+    if not isinstance(ring, LinearRing):
+        # In case they handed us a LineString
+        ring = LinearRing(ring)
+
+    pieces = cut(LinearRing(ring), distance, normalized=False)
+
+    if None in pieces:
+        # We cut exactly at the start or end.
+        return ring
+
+    # The first and last point in a linear ring are duplicated, so we omit one
+    # copy
+    return LinearRing(pieces[1].coords[:] + pieces[0].coords[1:])
+
+
+def reverse_line_string(line_string):
+    return LineString(line_string.coords[::-1])
+
+
+def ensure_multi_line_string(thing):
+    """Given either a MultiLineString or a single LineString, return a MultiLineString"""
+
+    if isinstance(thing, LineString):
+        return MultiLineString([thing])
+    else:
+        return thing
+
+
+def ensure_geometry_collection(thing):
+    """Given either some kind of geometry or a GeometryCollection, return a GeometryCollection"""
+
+    if isinstance(thing, (MultiLineString, MultiPolygon, MultiPoint)):
+        return GeometryCollection(thing.geoms)
+    elif isinstance(thing, GeometryCollection):
+        return thing
+    else:
+        return GeometryCollection([thing])
+
+
+def ensure_multi_polygon(thing):
+    """Given either a MultiPolygon or a single Polygon, return a MultiPolygon"""
+
+    if isinstance(thing, Polygon):
+        return MultiPolygon([thing])
+    else:
+        return thing
+
+
 def cut_path(points, length):
     """Return a subsection of at the start of the path that is length units long.
 
@@ -68,6 +124,14 @@ class Point:
     def __init__(self, x, y):
         self.x = x
         self.y = y
+
+    @classmethod
+    def from_shapely_point(cls, point):
+        return cls(point.x, point.y)
+
+    @classmethod
+    def from_tuple(cls, point):
+        return cls(point[0], point[1])
 
     def __json__(self):
         return vars(self)
@@ -99,11 +163,14 @@ class Point:
         else:
             raise ValueError("cannot multiply %s by %s" % (type(self), type(other)))
 
-    def __div__(self, other):
+    def __truediv__(self, other):
         if isinstance(other, (int, float)):
             return self * (1.0 / other)
         else:
             raise ValueError("cannot divide %s by %s" % (type(self), type(other)))
+
+    def __eq__(self, other):
+        return self.x == other.x and self.y == other.y
 
     def __repr__(self):
         return "%s(%s,%s)" % (type(self), self.x, self.y)

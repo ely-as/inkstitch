@@ -16,6 +16,11 @@ locales/
 /debug.svg
 /.idea
 /VERSION
+<<<<<<< HEAD
 #/src/
 *egg-info
 .DS_STORE
+.DS_Store
+/PROFILE
+/profile_stats
+/profile_stats.prof

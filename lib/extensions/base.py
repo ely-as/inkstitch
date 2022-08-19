@@ -8,16 +8,17 @@ import os
 import re
 from collections.abc import MutableMapping
 
-import inkex
 from lxml import etree
 from lxml.etree import Comment
 from stringcase import snakecase
+
+import inkex
 
 from ..commands import is_command, layer_commands
 from ..elements import EmbroideryElement, nodes_to_elements
 from ..elements.clone import is_clone
 from ..i18n import _
-from ..patterns import is_pattern
+from ..marker import has_marker
 from ..svg import generate_unique_id
 from ..svg.tags import (CONNECTOR_TYPE, EMBROIDERABLE_TAGS, INKSCAPE_GROUPMODE,
                         NOT_EMBROIDERABLE_TAGS, SVG_CLIPPATH_TAG, SVG_DEFS_TAG,
@@ -121,7 +122,7 @@ class InkstitchExtension(inkex.Effect):
         return current_layer
 
     def no_elements_error(self):
-        if self.svg.selected:
+        if self.svg.selection:
             # l10n This was previously: "No embroiderable paths selected."
             inkex.errormsg(_("Ink/Stitch doesn't know how to work with any of the objects you've selected.") + "\n")
         else:
@@ -156,8 +157,8 @@ class InkstitchExtension(inkex.Effect):
         if is_command(node) or node.get(CONNECTOR_TYPE):
             return []
 
-        if self.svg.selected:
-            if node.get("id") in self.svg.selected:
+        if self.svg.selection:
+            if node.get("id") in self.svg.selection:
                 selected = True
         else:
             # if the user didn't select anything that means we process everything
@@ -169,10 +170,10 @@ class InkstitchExtension(inkex.Effect):
         if selected:
             if node.tag == SVG_GROUP_TAG:
                 pass
-            elif (node.tag in EMBROIDERABLE_TAGS or is_clone(node)) and not is_pattern(node):
+            elif (node.tag in EMBROIDERABLE_TAGS or is_clone(node)) and not has_marker(node):
                 nodes.append(node)
-            # add images, text and patterns for the troubleshoot extension
-            elif troubleshoot and (node.tag in NOT_EMBROIDERABLE_TAGS or is_pattern(node)):
+            # add images, text and elements with a marker for the troubleshoot extension
+            elif troubleshoot and (node.tag in NOT_EMBROIDERABLE_TAGS or has_marker(node)):
                 nodes.append(node)
 
         return nodes
@@ -187,14 +188,6 @@ class InkstitchExtension(inkex.Effect):
         if not troubleshoot:
             self.no_elements_error()
         return False
-
-    def get_selected_in_order(self):
-        selected = []
-        for i in self.options.ids:
-            path = '//*[@id="%s"]' % i
-            for node in self.document.xpath(path, namespaces=inkex.NSS):
-                selected.append(node)
-        return selected
 
     def elements_to_stitch_groups(self, elements):
         patches = []

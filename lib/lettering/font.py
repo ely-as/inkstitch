@@ -15,6 +15,7 @@ from ..elements import nodes_to_elements
 from ..exceptions import InkstitchException
 from ..extensions.lettering_custom_font_dir import get_custom_font_dir
 from ..i18n import _, get_languages
+from ..marker import MARKER, ensure_marker
 from ..stitches.auto_satin import auto_satin
 from ..svg.tags import (CONNECTION_END, CONNECTION_START, INKSCAPE_LABEL,
                         SVG_PATH_TAG, SVG_USE_TAG, XLINK_HREF)
@@ -86,14 +87,14 @@ class Font(object):
 
     def _load_metadata(self):
         try:
-            with open(os.path.join(self.path, "font.json"), encoding="utf-8") as metadata_file:
+            with open(os.path.join(self.path, "font.json"), encoding="utf-8-sig") as metadata_file:
                 self.metadata = json.load(metadata_file)
         except IOError:
             pass
 
     def _load_license(self):
         try:
-            with open(os.path.join(self.path, "LICENSE"), encoding="utf-8") as license_file:
+            with open(os.path.join(self.path, "LICENSE"), encoding="utf-8-sig") as license_file:
                 self.license = license_file.read()
         except IOError:
             pass
@@ -218,7 +219,9 @@ class Font(object):
                         style += inkex.Style("stroke-width:0.5px")
                 element.set('style', '%s' % style.to_str())
 
+        # make sure necessary marker and command symbols are in the defs section
         self._ensure_command_symbols(destination_group)
+        self._ensure_marker_symbols(destination_group)
 
         return destination_group
 
@@ -336,6 +339,15 @@ class Font(object):
         for command in commands:
             ensure_symbol(group.getroottree().getroot(), command)
 
+    def _ensure_marker_symbols(self, group):
+        for marker in MARKER:
+            xpath = ".//*[contains(@style, 'marker-start:url(#inkstitch-%s-marker')]" % marker
+            marked_elements = group.xpath(xpath, namespaces=inkex.NSS)
+            if marked_elements:
+                ensure_marker(group.getroottree().getroot(), marker)
+                for element in marked_elements:
+                    element.style['marker-start'] = "url(#inkstitch-%s-marker)" % marker
+
     def _apply_auto_satin(self, group, trim):
         """Apply Auto-Satin to an SVG XML node tree with an svg:g at its root.
 
@@ -343,5 +355,9 @@ class Font(object):
         satin operation.  Any nested svg:g elements will be removed.
         """
 
+        # TODO: trim option for non-auto-route
+
         elements = nodes_to_elements(group.iterdescendants(SVG_PATH_TAG))
-        auto_satin(elements, preserve_order=True, trim=trim)
+
+        if elements:
+            auto_satin(elements, preserve_order=True, trim=trim)

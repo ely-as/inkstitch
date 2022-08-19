@@ -16,8 +16,7 @@ from shapely.strtree import STRtree
 from ..debug import debug
 from ..stitch_plan import Stitch
 from ..svg import PIXELS_PER_MM
-from ..utils.geometry import Point as InkstitchPoint
-from ..utils.geometry import line_string_to_point_list
+from ..utils.geometry import Point as InkstitchPoint, line_string_to_point_list, ensure_multi_line_string
 from .fill import intersect_region_with_grating, stitch_row
 from .running_stitch import running_stitch
 
@@ -54,25 +53,28 @@ def auto_fill(shape,
               end_row_spacing,
               max_stitch_length,
               running_stitch_length,
+              running_stitch_tolerance,
               staggers,
               skip_last,
               starting_point,
               ending_point=None,
               underpath=True):
-    fill_stitch_graph = []
-    try:
-        fill_stitch_graph = build_fill_stitch_graph(shape, angle, row_spacing, end_row_spacing, starting_point, ending_point)
-    except ValueError:
-        # Small shapes will cause the graph to fail - min() arg is an empty sequence through insert node
-        return fallback(shape, running_stitch_length)
+    rows = intersect_region_with_grating(shape, angle, row_spacing, end_row_spacing)
+    if not rows:
+        # Small shapes may not intersect with the grating at all.
+        return fallback(shape, running_stitch_length, running_stitch_tolerance)
+
+    segments = [segment for row in rows for segment in row]
+    fill_stitch_graph = build_fill_stitch_graph(shape, segments, starting_point, ending_point)
 
     if not graph_is_valid(fill_stitch_graph, shape, max_stitch_length):
-        return fallback(shape, running_stitch_length)
+        return fallback(shape, running_stitch_length, running_stitch_tolerance)
 
     travel_graph = build_travel_graph(fill_stitch_graph, shape, angle, underpath)
     path = find_stitch_path(fill_stitch_graph, travel_graph, starting_point, ending_point)
     result = path_to_stitches(path, travel_graph, fill_stitch_graph, angle, row_spacing,
-                              max_stitch_length, running_stitch_length, staggers, skip_last)
+                              max_stitch_length, running_stitch_length, running_stitch_tolerance,
+                              staggers, skip_last)
 
     return result
 
@@ -88,9 +90,10 @@ def which_outline(shape, coords):
     # fail sometimes.
 
     point = shgeo.Point(*coords)
-    outlines = list(shape.boundary)
+    outlines = ensure_multi_line_string(shape.boundary).geoms
     outline_indices = list(range(len(outlines)))
-    closest = min(outline_indices, key=lambda index: outlines[index].distance(point))
+    closest = min(outline_indices,
+                  key=lambda index: outlines[index].distance(point))
 
     return closest
 
@@ -101,12 +104,12 @@ def project(shape, coords, outline_index):
     This returns the distance along the outline at which the point resides.
     """
 
-    outline = list(shape.boundary)[outline_index]
+    outline = ensure_multi_line_string(shape.boundary).geoms[outline_index]
     return outline.project(shgeo.Point(*coords))
 
 
 @debug.time
-def build_fill_stitch_graph(shape, angle, row_spacing, end_row_spacing, starting_point=None, ending_point=None):
+def build_fill_stitch_graph(shape, segments, starting_point=None, ending_point=None):
     """build a graph representation of the grating segments
 
     This function builds a specialized graph (as in graph theory) that will
@@ -141,10 +144,6 @@ def build_fill_stitch_graph(shape, angle, row_spacing, end_row_spacing, starting
 
     debug.add_layer("auto-fill fill stitch")
 
-    # Convert the shape into a set of parallel line segments.
-    rows_of_segments = intersect_region_with_grating(shape, angle, row_spacing, end_row_spacing)
-    segments = [segment for row in rows_of_segments for segment in row]
-
     graph = networkx.MultiGraph()
 
     # First, add the grating segments as edges.  We'll use the coordinates
@@ -152,7 +151,7 @@ def build_fill_stitch_graph(shape, angle, row_spacing, end_row_spacing, starting
     for segment in segments:
         # networkx allows us to label nodes with arbitrary data.  We'll
         # mark this one as a grating segment.
-        graph.add_edge(*segment, key="segment", underpath_edges=[])
+        graph.add_edge(segment[0], segment[-1], key="segment", underpath_edges=[], geometry=shgeo.LineString(segment))
 
     tag_nodes_with_outline_and_projection(graph, shape, graph.nodes())
     add_edges_between_outline_nodes(graph, duplicate_every_other=True)
@@ -174,7 +173,7 @@ def insert_node(graph, shape, point):
     point = tuple(point)
     outline = which_outline(shape, point)
     projection = project(shape, point, outline)
-    projected_point = list(shape.boundary)[outline].interpolate(projection)
+    projected_point = ensure_multi_line_string(shape.boundary).geoms[outline].interpolate(projection)
     node = (projected_point.x, projected_point.y)
 
     edges = []
@@ -199,7 +198,8 @@ def tag_nodes_with_outline_and_projection(graph, shape, nodes):
 
 
 def add_boundary_travel_nodes(graph, shape):
-    for outline_index, outline in enumerate(shape.boundary):
+    outlines = ensure_multi_line_string(shape.boundary).geoms
+    for outline_index, outline in enumerate(outlines):
         prev = None
         for point in outline.coords:
             point = shgeo.Point(point)
@@ -230,7 +230,8 @@ def add_edges_between_outline_nodes(graph, duplicate_every_other=False):
     outline.
     """
 
-    nodes = list(graph.nodes(data=True))  # returns a list of tuples: [(node, {data}), (node, {data}) ...]
+    # returns a list of tuples: [(node, {data}), (node, {data}) ...]
+    nodes = list(graph.nodes(data=True))
     nodes.sort(key=lambda node: (node[1]['outline'], node[1]['projection']))
 
     for outline_index, nodes in groupby(nodes, key=lambda node: node[1]['outline']):
@@ -252,7 +253,7 @@ def graph_is_valid(graph, shape, max_stitch_length):
     return not networkx.is_empty(graph) and networkx.is_eulerian(graph)
 
 
-def fallback(shape, running_stitch_length):
+def fallback(shape, running_stitch_length, running_stitch_tolerance):
     """Generate stitches when the auto-fill algorithm fails.
 
     If graph_is_valid() returns False, we're not going to be able to run the
@@ -261,7 +262,10 @@ def fallback(shape, running_stitch_length):
     matter.
     """
 
-    return running_stitch(line_string_to_point_list(shape.boundary[0]), running_stitch_length)
+    boundary = ensure_multi_line_string(shape.boundary)
+    outline = boundary.geoms[0]
+
+    return running_stitch(line_string_to_point_list(outline), running_stitch_length, running_stitch_tolerance)
 
 
 @debug.time
@@ -325,7 +329,7 @@ def get_segments(graph):
     segments = []
     for start, end, key, data in graph.edges(keys=True, data=True):
         if key == 'segment':
-            segments.append(shgeo.LineString((start, end)))
+            segments.append(data["geometry"])
 
     return segments
 
@@ -363,7 +367,8 @@ def process_travel_edges(graph, fill_stitch_graph, shape, travel_edges):
             # segments that _might_ intersect ls.  Refining the result is
             # necessary but the STRTree still saves us a ton of time.
             if segment.crosses(ls):
-                start, end = segment.coords
+                start = segment.coords[0]
+                end = segment.coords[-1]
                 fill_stitch_graph[start][end]['segment']['underpath_edges'].append(edge)
 
         # The weight of a travel edge is the length of the line segment.
@@ -384,19 +389,10 @@ def process_travel_edges(graph, fill_stitch_graph, shape, travel_edges):
 
 
 def travel_grating(shape, angle, row_spacing):
-    rows_of_segments = intersect_region_with_grating(shape, angle, row_spacing)
-    segments = list(chain(*rows_of_segments))
+    rows = intersect_region_with_grating(shape, angle, row_spacing)
+    segments = [segment for row in rows for segment in row]
 
-    return shgeo.MultiLineString(segments)
-
-
-def ensure_multi_line_string(thing):
-    """Given either a MultiLineString or a single LineString, return a MultiLineString"""
-
-    if isinstance(thing, shgeo.LineString):
-        return shgeo.MultiLineString([thing])
-    else:
-        return thing
+    return shgeo.MultiLineString(list(segments))
 
 
 def build_travel_edges(shape, fill_angle):
@@ -443,7 +439,7 @@ def build_travel_edges(shape, fill_angle):
     debug.log_line_strings(grating3, "grating3")
 
     endpoints = [coord for mls in (grating1, grating2, grating3)
-                 for ls in mls
+                 for ls in mls.geoms
                  for coord in ls.coords]
 
     diagonal_edges = ensure_multi_line_string(grating1.symmetric_difference(grating2))
@@ -451,7 +447,7 @@ def build_travel_edges(shape, fill_angle):
     # without this, floating point inaccuracies prevent the intersection points from lining up perfectly.
     vertical_edges = ensure_multi_line_string(snap(grating3.difference(grating1), diagonal_edges, 0.005))
 
-    return endpoints, chain(diagonal_edges, vertical_edges)
+    return endpoints, chain(diagonal_edges.geoms, vertical_edges.geoms)
 
 
 def nearest_node(nodes, point, attr=None):
@@ -589,12 +585,12 @@ def collapse_sequential_outline_edges(path):
     return new_path
 
 
-def travel(travel_graph, start, end, running_stitch_length, skip_last):
+def travel(travel_graph, start, end, running_stitch_length, running_stitch_tolerance, skip_last):
     """Create stitches to get from one point on an outline of the shape to another."""
 
     path = networkx.shortest_path(travel_graph, start, end, weight='weight')
     path = [Stitch(*p) for p in path]
-    stitches = running_stitch(path, running_stitch_length)
+    stitches = running_stitch(path, running_stitch_length, running_stitch_tolerance)
 
     for stitch in stitches:
         stitch.add_tag('auto_fill_travel')
@@ -616,7 +612,8 @@ def travel(travel_graph, start, end, running_stitch_length, skip_last):
 
 
 @debug.time
-def path_to_stitches(path, travel_graph, fill_stitch_graph, angle, row_spacing, max_stitch_length, running_stitch_length, staggers, skip_last):
+def path_to_stitches(path, travel_graph, fill_stitch_graph, angle, row_spacing, max_stitch_length, running_stitch_length, running_stitch_tolerance,
+                     staggers, skip_last):
     path = collapse_sequential_outline_edges(path)
 
     stitches = []
@@ -630,6 +627,6 @@ def path_to_stitches(path, travel_graph, fill_stitch_graph, angle, row_spacing, 
             stitch_row(stitches, edge[0], edge[1], angle, row_spacing, max_stitch_length, staggers, skip_last)
             travel_graph.remove_edges_from(fill_stitch_graph[edge[0]][edge[1]]['segment'].get('underpath_edges', []))
         else:
-            stitches.extend(travel(travel_graph, edge[0], edge[1], running_stitch_length, skip_last))
+            stitches.extend(travel(travel_graph, edge[0], edge[1], running_stitch_length, running_stitch_tolerance, skip_last))
 
     return stitches
