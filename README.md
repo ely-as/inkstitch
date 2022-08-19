@@ -4,7 +4,7 @@ This fork simply adds package files - [pyproject.toml](pyproject.toml), [setup.c
 
 Installation:
 ```sh
-pip install git+https://github.com/ely-as/inkstitch@v2.1.2
+pip install git+https://github.com/ely-as/inkstitch@v2.2.0
 ```
 
 Example usage:
