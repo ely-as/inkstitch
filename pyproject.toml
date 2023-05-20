@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "inkstitch"
 version = "2.2.0"
-requires-python = "<3.10"
+requires-python = "<3.10"  # see https://github.com/wxWidgets/Phoenix/issues/2325
 description = "Ink/Stitch: an Inkscape extension for machine embroidery design"
 license = {file = "LICENSE"}
 dependencies = [

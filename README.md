@@ -1,20 +1,37 @@
-# Note about this fork
+## About this fork
 
-This fork simply adds package files - [pyproject.toml](pyproject.toml), [setup.cfg](setup.cfg) and a [src](src) directory - so that the Python library located in [lib](lib) can be installed via pip and made available as a package named `inkstitch`.
+This fork adds a [pyproject.toml](pyproject.toml) and a [src directory](src) so Ink/Stitch's [Python library](lib) can be installed using `pip` and made available as a package named `inkstitch`.
 
-Installation:
-```sh
-pip install git+https://github.com/ely-as/inkstitch@v2.2.0
+### Installation
+```console
+$ pip install --upgrade pip
+$ pip install git+https://github.com/ely-as/inkstitch@v2.2.0
 ```
 
-Example usage:
+### Example usage
 ```py
 from inkstitch.output import write_embroidery_file
 
 ...
 ```
 
-***
+### Updating pyproject.toml
+
+The project metadata should be updated to correspond with each Ink/Stitch release.
+
+`requires-python`
+
+  - Find out which versions of Python are supported.
+
+`dependencies`
+
+  - Check [requirements.txt](https://github.com/inkstitch/inkstitch/blob/main/requirements.txt) for any changes (packages added or removed, or updated version specifiers/commit hashes¹).
+  - Check the commit hash¹ for the `pyembroidery` Git submodule.
+
+**¹** When specifying commit hashes [specify full hashes to reduce network calls](https://pip.pypa.io/en/stable/topics/vcs-support/#git).
+
+---
+
 
 <a href="https://user-images.githubusercontent.com/11083514/41197881-e862e07a-6c62-11e8-89d6-32915e52bece.png"><img align=right src="images/examples/inkstitch_logo_screenshot.png"></a>
 
