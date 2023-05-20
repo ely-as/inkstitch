@@ -1,4 +1,35 @@
 [build-system]
-# https://setuptools.pypa.io/en/latest/build_meta.html#how-to-use-it
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "inkstitch"
+version = "2.2.0"
+requires-python = "<3.10"
+description = "Ink/Stitch: an Inkscape extension for machine embroidery design"
+license = {file = "LICENSE"}
+dependencies = [
+    "pyembroidery @ git+https://github.com/inkstitch/pyembroidery@83276c06291c624bfd320a33417da4e42ac05a2f#egg=pyembroidery",
+    "inkex @ git+https://gitlab.com/inkscape/extensions.git@e44fdcbe6bcc917ef3a2164eb0c130f7276fb83f#egg=inkex",
+    "backports.functools_lru_cache",
+    "wxPython",
+    "networkx",
+    "shapely < 2",
+    "lxml",
+    "appdirs",
+    "numpy < 2",
+    "requests",
+    "colormath",
+    "stringcase",
+    "tinycss2",
+    "flask",
+    "fonttools",
+    "trimesh",
+    "scipy",
+    "jinja2 > 2.9",
+    "pywinutils; sys_platform=='win32'",
+    "pywin32; sys_platform=='win32'",
+]
+
+[tool.setuptools.dynamic]
+readme = {file = ["README.md"], content-type = "text/markdown"}
